@@ -1,19 +1,23 @@
-# Python 本地通讯程序（Windows 客户端 + VPS 服务端）
+# 更便捷版：Windows 客户端 + VPS 一键部署面板（HTTPS）
 
-本项目包含：
+这版重点做了“便捷性”重构：
+- 客户端支持**保存配置**、**测试连接**、**表格化收件箱**、**一键下载附件**。
+- 部署端支持在一个面板里输入 **域名/邮箱/API Key**，直接完成**安装后端 + Nginx + SSL 证书**。
 
-1. `client/windows_client.py`：Windows 本地 GUI 客户端（Tkinter）。
-2. `server/app.py`：服务端 API（Flask），支持给指定用户发送消息/文件。
-3. `deploy/vps_panel.py`：VPS 部署面板（Flask），提供**安装 / 卸载 / 重启**功能。
+## 目录结构
 
-## 功能说明
+- `client/windows_client.py`：Windows GUI 客户端。
+- `server/app.py`：Flask API 服务端。
+- `deploy/vps_panel.py`：VPS 部署面板（安装/卸载/重启）。
 
-- 通讯协议：客户端要求服务器地址必须是 `https://`。
-- 发送：支持向指定用户发送文本消息和文件。
-- 收件箱：客户端可拉取指定用户消息列表。
-- 服务端部署：通过面板按钮执行安装和卸载，不是输入脚本链接直接部署。
+## 客户端特性（Windows）
 
-## Windows 客户端运行
+1. 强制仅允许 `https://` 服务器地址。
+2. 发送文本消息与文件给指定用户。
+3. 收件箱以表格显示，支持下载选中的附件。
+4. 自动保存最近一次配置（`client/client_config.json`）。
+
+运行：
 
 ```bash
 python -m venv .venv
@@ -21,9 +25,21 @@ python -m venv .venv
 .venv\Scripts\python client\windows_client.py
 ```
 
-## VPS 部署面板运行
+## VPS 面板（更便捷）
 
-> 需要 root 权限（用于写入 systemd 服务）。
+面板运行后打开 `http://<VPS_IP>:8088`，填写：
+- 域名（已解析到 VPS）
+- 邮箱（申请证书）
+- API Key（客户端与服务端鉴权）
+
+点击“安装并配置 HTTPS”会尝试自动执行：
+1. 安装依赖（`nginx`, `certbot`, `python3-venv` 等）
+2. 创建 Python 虚拟环境并安装依赖
+3. 写入并启动 `chat-server` systemd 服务
+4. 写入 Nginx 反向代理配置
+5. 申请并启用 HTTPS 证书（Let's Encrypt）
+
+运行面板：
 
 ```bash
 python3 -m venv .venv
@@ -31,15 +47,17 @@ python3 -m venv .venv
 .venv/bin/python deploy/vps_panel.py
 ```
 
-打开：`http://<VPS_IP>:8088`，点击“安装”后会创建并启动 `chat-server` systemd 服务。
+## 服务端 API
 
-## HTTPS 配置（必需）
+- `POST /api/send`：发送消息/文件。
+- `GET /api/inbox/<username>?limit=200`：拉取收件箱。
+- `GET /api/messages/<message_id>/download`：下载附件。
+- `GET /health`：健康检查。
 
-面板只负责安装后端服务（监听 `127.0.0.1:5000`）。
-你需要在 VPS 上配置 Nginx + SSL 证书（如 Let's Encrypt），并将域名反代到该端口。
-客户端只能填写 `https://your-domain`。
+鉴权方式：请求头 `X-API-Key`。
 
-## 安全提示
+## 注意事项
 
-- 默认 `CHAT_API_KEY=change-me`，生产环境请务必改为强随机值。
-- 推荐仅开放 443 端口，面板端口应加防火墙白名单或仅内网访问。
+- 请确保域名 DNS 已正确指向 VPS。
+- 面板脚本需 root 权限（systemd/nginx/certbot）。
+- 卸载默认不删除数据库与证书文件，避免误删数据。

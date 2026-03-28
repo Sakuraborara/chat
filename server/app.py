@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import os
 import sqlite3
 import uuid
@@ -16,6 +17,10 @@ DB_PATH = DATA_DIR / "messages.db"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _connect() -> sqlite3.Connection:
@@ -46,13 +51,13 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.config["API_KEY"] = os.getenv("CHAT_API_KEY", "change-me")
 
-    @app.get("/health")
-    def health() -> tuple[dict, int]:
-        return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}, 200
-
     def _authorized() -> bool:
         api_key = request.headers.get("X-API-Key", "")
-        return api_key and api_key == app.config["API_KEY"]
+        return bool(api_key and api_key == app.config["API_KEY"])
+
+    @app.get("/health")
+    def health() -> tuple[dict, int]:
+        return {"status": "ok", "time": utc_now()}, 200
 
     @app.post("/api/send")
     def send_message():
@@ -75,7 +80,10 @@ def create_app() -> Flask:
 
         if file_name and file_content_b64:
             safe_file_name = Path(file_name).name
-            raw = base64.b64decode(file_content_b64)
+            try:
+                raw = base64.b64decode(file_content_b64, validate=True)
+            except (binascii.Error, ValueError):
+                return jsonify({"error": "invalid file content"}), 400
             stored_name = f"{message_id}_{safe_file_name}"
             full_path = UPLOAD_DIR / stored_name
             full_path.write_bytes(raw)
@@ -87,15 +95,7 @@ def create_app() -> Flask:
                 INSERT INTO messages (id, sender, recipient, message, file_name, file_path, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    message_id,
-                    sender,
-                    recipient,
-                    message,
-                    safe_file_name,
-                    file_path,
-                    datetime.now(timezone.utc).isoformat(),
-                ),
+                (message_id, sender, recipient, message, safe_file_name, file_path, utc_now()),
             )
             conn.commit()
 
@@ -106,6 +106,7 @@ def create_app() -> Flask:
         if not _authorized():
             return jsonify({"error": "Unauthorized"}), 401
 
+        limit = min(max(int(request.args.get("limit", 200)), 1), 500)
         with _connect() as conn:
             rows = conn.execute(
                 """
@@ -113,27 +114,30 @@ def create_app() -> Flask:
                 FROM messages
                 WHERE recipient = ?
                 ORDER BY created_at DESC
-                LIMIT 200
+                LIMIT ?
                 """,
-                (username,),
+                (username, limit),
             ).fetchall()
 
         data = []
         for row in rows:
             item = dict(row)
-            if item.get("file_path"):
-                item["download_url"] = f"/api/file/{item['file_path']}"
-            else:
-                item["download_url"] = None
+            item["download_url"] = f"/api/messages/{item['id']}/download" if item.get("file_path") else None
             data.append(item)
-
         return jsonify({"items": data}), 200
 
-    @app.get("/api/file/<path:stored_name>")
-    def get_file(stored_name: str):
+    @app.get("/api/messages/<message_id>/download")
+    def download_by_message(message_id: str):
         if not _authorized():
             return jsonify({"error": "Unauthorized"}), 401
-        return send_from_directory(UPLOAD_DIR, stored_name, as_attachment=True)
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT file_path FROM messages WHERE id = ? AND file_path IS NOT NULL",
+                (message_id,),
+            ).fetchone()
+        if not row:
+            return jsonify({"error": "file not found"}), 404
+        return send_from_directory(UPLOAD_DIR, row["file_path"], as_attachment=True)
 
     return app
 
