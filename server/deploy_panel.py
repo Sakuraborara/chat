@@ -2,13 +2,14 @@
 """
 VPS 部署面板（交互式）。
 提供：安装、卸载、启动、停止、状态。
-安装来源：从 GitHub 仓库拉取代码，而不是使用面板所在目录的本地代码。
+安装来源：可直接输入 deploy_panel.py 的 GitHub 地址，面板会自动解析仓库并拉取部署。
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,7 +25,11 @@ VENV_DIR = DEPLOY_ROOT / ".venv"
 CERT_DIR = DEPLOY_ROOT / "certs"
 CERT_FILE = CERT_DIR / "server.crt"
 KEY_FILE = CERT_DIR / "server.key"
-DEFAULT_REPO_URL = "https://github.com/your-org/your-repo.git"
+DEFAULT_BLOB_URL = (
+    "https://github.com/Sakuraborara/chat/blob/"
+    "codex/create-python-windows-local-client-server-app/server/deploy_panel.py"
+)
+DEFAULT_SCRIPT_PATH = "server/deploy_panel.py"
 DEFAULT_BRANCH = "main"
 
 
@@ -39,29 +44,74 @@ def ensure_root():
         sys.exit(1)
 
 
+def parse_blob_url(blob_url: str, script_path: str) -> tuple[str, str] | None:
+    """
+    从 GitHub blob 地址解析出 repo_url 与 branch。
+    支持 branch 名字包含斜杠（例如 codex/create-xxx）。
+    """
+    m = re.match(r"^https://github\.com/([^/]+)/([^/]+)/blob/(.+)$", blob_url.strip())
+    if not m:
+        return None
+
+    owner, repo, rest = m.group(1), m.group(2), m.group(3)
+    suffix = f"/{script_path}"
+    if not rest.endswith(suffix):
+        return None
+
+    branch = rest[: -len(suffix)].strip("/")
+    if not branch:
+        return None
+
+    repo_url = f"https://github.com/{owner}/{repo}.git"
+    return repo_url, branch
+
+
 def load_config() -> dict:
     if CONFIG_FILE.exists():
         try:
             return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             pass
-    return {"repo_url": DEFAULT_REPO_URL, "branch": DEFAULT_BRANCH}
+    return {
+        "blob_url": DEFAULT_BLOB_URL,
+        "script_path": DEFAULT_SCRIPT_PATH,
+        "repo_url": "",
+        "branch": DEFAULT_BRANCH,
+    }
 
 
-def save_config(repo_url: str, branch: str):
-    payload = {"repo_url": repo_url, "branch": branch}
+def save_config(payload: dict):
     CONFIG_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def ask_repo_config() -> tuple[str, str]:
+def ask_source_config() -> tuple[str, str]:
     cfg = load_config()
-    current_url = cfg.get("repo_url", DEFAULT_REPO_URL)
-    current_branch = cfg.get("branch", DEFAULT_BRANCH)
+    blob_url = input(f"deploy_panel.py GitHub 地址 [{cfg.get('blob_url', DEFAULT_BLOB_URL)}]: ").strip()
+    blob_url = blob_url or cfg.get("blob_url", DEFAULT_BLOB_URL)
 
-    print("\n--- GitHub 部署配置 ---")
-    repo_url = input(f"GitHub 仓库地址 [{current_url}]: ").strip() or current_url
-    branch = input(f"分支 [{current_branch}]: ").strip() or current_branch
-    save_config(repo_url, branch)
+    script_path = input(f"该脚本在仓库中的路径 [{cfg.get('script_path', DEFAULT_SCRIPT_PATH)}]: ").strip()
+    script_path = script_path or cfg.get("script_path", DEFAULT_SCRIPT_PATH)
+
+    parsed = parse_blob_url(blob_url, script_path)
+    if parsed:
+        repo_url, branch = parsed
+        print(f"已自动解析仓库: {repo_url}")
+        print(f"已自动解析分支: {branch}")
+    else:
+        print("⚠️ 无法从脚本地址自动解析，改为手动输入仓库和分支。")
+        repo_default = cfg.get("repo_url") or "https://github.com/owner/repo.git"
+        branch_default = cfg.get("branch", DEFAULT_BRANCH)
+        repo_url = input(f"GitHub 仓库地址 [{repo_default}]: ").strip() or repo_default
+        branch = input(f"分支 [{branch_default}]: ").strip() or branch_default
+
+    save_config(
+        {
+            "blob_url": blob_url,
+            "script_path": script_path,
+            "repo_url": repo_url,
+            "branch": branch,
+        }
+    )
     return repo_url, branch
 
 
@@ -99,12 +149,9 @@ WantedBy=multi-user.target
 
 def install():
     ensure_root()
-    print("\n===> 安装服务中（从 GitHub 拉取）...")
+    print("\n===> 安装服务中（根据 deploy_panel.py GitHub 地址自动拉取）...")
 
-    repo_url, branch = ask_repo_config()
-    if "github.com" not in repo_url:
-        print("⚠️ 你输入的地址看起来不是 GitHub，仍会继续尝试。")
-
+    repo_url, branch = ask_source_config()
     sync_repo_from_github(repo_url, branch)
 
     if not (APP_DIR / "requirements.txt").exists() or not (APP_DIR / "app.py").exists():
@@ -181,7 +228,7 @@ def menu():
 ==============================
 Secure HTTPS Messenger 面板
 ==============================
-1) 安装 / 更新（GitHub 拉取）
+1) 安装 / 更新（输入 deploy_panel.py GitHub 地址）
 2) 卸载
 3) 启动服务
 4) 停止服务
