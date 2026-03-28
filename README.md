@@ -7,7 +7,7 @@
 - 部署到 VPS 的 **服务端脚本**
 - 一个 **交互式部署面板**（安装/卸载/启动/停止/状态）
 
-> 满足你的要求：不是输入脚本链接后直接部署，而是通过面板进行安装和卸载管理。
+> 满足你的要求：不是输入脚本链接后直接部署，而是通过面板从 GitHub 拉取仓库并进行安装和卸载管理。
 
 ---
 
@@ -62,11 +62,12 @@ python secure_transfer_client.py
 ```bash
 cd server
 sudo python3 deploy_panel.py
+# 首次安装会提示输入 GitHub 仓库地址和分支
 ```
 
 你会看到菜单：
 
-- `1` 安装 / 更新
+- `1` 安装 / 更新（从 GitHub 拉取）
 - `2` 卸载
 - `3` 启动服务
 - `4` 停止服务
@@ -75,9 +76,11 @@ sudo python3 deploy_panel.py
 
 ### 安装动作会做什么
 
+- 询问并保存 GitHub 仓库地址/分支配置
+- `git clone` 或 `git pull` 拉取最新代码到 `/opt/secure-msg-server`
 - 创建虚拟环境 `.venv`
 - 安装依赖 `flask`
-- 生成自签名 TLS 证书（`server/certs/server.crt` + `server/certs/server.key`）
+- 生成自签名 TLS 证书（`/opt/secure-msg-server/certs/server.crt` + `/opt/secure-msg-server/certs/server.key`）
 - 写入 `systemd` 服务：`secure-msg-server`
 - 启动并设置开机自启
 
