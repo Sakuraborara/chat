@@ -2,12 +2,9 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SERVICE_NAME="chat-server"
 VENV_DIR="$APP_DIR/.venv"
-NGINX_SITE="/etc/nginx/sites-available/chat-server"
-
-DOMAIN=""
-EMAIL=""
+PANEL_SERVICE="chat-deploy-panel"
+PANEL_PORT="8088"
 
 log() { echo -e "[+] $*"; }
 warn() { echo -e "[!] $*"; }
@@ -20,26 +17,16 @@ need_root() {
   fi
 }
 
-prompt_missing() {
-  [[ -n "$DOMAIN" ]] || read -r -p "请输入域名(已解析到VPS): " DOMAIN
-  [[ -n "$EMAIL" ]] || read -r -p "请输入邮箱(用于证书): " EMAIL
-
-  if [[ -z "$DOMAIN" || -z "$EMAIL" ]]; then
-    err "域名/邮箱都不能为空"
-    exit 1
-  fi
-}
-
-write_service() {
-  cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
+write_panel_service() {
+  cat > "/etc/systemd/system/${PANEL_SERVICE}.service" <<EOF
 [Unit]
-Description=Chat HTTPS Server
+Description=Chat Deploy Panel
 After=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=${APP_DIR}
-ExecStart=${VENV_DIR}/bin/gunicorn -w 2 -b 127.0.0.1:5000 server.app:app
+ExecStart=${VENV_DIR}/bin/python ${APP_DIR}/deploy/vps_panel.py
 Restart=always
 User=root
 
@@ -48,102 +35,73 @@ WantedBy=multi-user.target
 EOF
 }
 
-write_nginx() {
-  cat > "$NGINX_SITE" <<EOF
-server {
-    listen 80;
-    server_name ${DOMAIN};
-
-    location / {
-        proxy_pass http://127.0.0.1:5000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-EOF
-  ln -sf "$NGINX_SITE" /etc/nginx/sites-enabled/chat-server
-}
-
-install_all() {
+setup_panel() {
   need_root
-  prompt_missing
-
-  log "安装系统依赖"
+  log "安装启动面板所需依赖"
   apt-get update
-  apt-get install -y python3-venv python3-pip nginx certbot python3-certbot-nginx
+  apt-get install -y python3-venv python3-pip
 
-  log "创建虚拟环境并安装依赖"
+  log "创建虚拟环境并安装 requirements"
   python3 -m venv "$VENV_DIR"
   "$VENV_DIR/bin/pip" install --upgrade pip
   "$VENV_DIR/bin/pip" install -r "$APP_DIR/requirements.txt"
 
-  mkdir -p "$APP_DIR/server/data/uploads"
-  write_service
-  write_nginx
-
-  log "重载并启动服务"
+  write_panel_service
   systemctl daemon-reload
-  systemctl enable "$SERVICE_NAME"
-  systemctl restart "$SERVICE_NAME"
+  systemctl enable "$PANEL_SERVICE"
+  systemctl restart "$PANEL_SERVICE"
 
-  log "检查 Nginx 配置"
-  nginx -t
-  systemctl reload nginx
-
-  log "申请 HTTPS 证书"
-  certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL" --redirect
-  systemctl reload nginx
-
-  log "部署完成。客户端服务器地址填写: https://${DOMAIN}"
+  log "部署面板已启动"
+  log "访问地址: http://<VPS_IP>:${PANEL_PORT}"
+  log "后续的程序部署/卸载请在面板中操作"
 }
 
-uninstall_all() {
+start_panel() {
   need_root
-  warn "开始卸载服务（不会删除数据库和上传文件）"
-  systemctl stop "$SERVICE_NAME" || true
-  systemctl disable "$SERVICE_NAME" || true
-  rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+  systemctl start "$PANEL_SERVICE"
+  systemctl status "$PANEL_SERVICE" --no-pager -l || true
+}
 
-  rm -f "$NGINX_SITE"
-  rm -f /etc/nginx/sites-enabled/chat-server
+stop_panel() {
+  need_root
+  systemctl stop "$PANEL_SERVICE"
+  systemctl status "$PANEL_SERVICE" --no-pager -l || true
+}
+
+status_panel() {
+  systemctl status "$PANEL_SERVICE" --no-pager -l || true
+}
+
+uninstall_panel() {
+  need_root
+  warn "卸载面板服务（不会卸载已通过面板部署的 chat-server）"
+  systemctl stop "$PANEL_SERVICE" || true
+  systemctl disable "$PANEL_SERVICE" || true
+  rm -f "/etc/systemd/system/${PANEL_SERVICE}.service"
   systemctl daemon-reload
-  nginx -t || true
-  systemctl reload nginx || true
-
-  log "卸载完成"
-}
-
-restart_service() {
-  need_root
-  systemctl restart "$SERVICE_NAME"
-  systemctl status "$SERVICE_NAME" --no-pager -l || true
-}
-
-show_status() {
-  systemctl status "$SERVICE_NAME" --no-pager -l || true
-  echo
-  nginx -t || true
+  log "面板服务已卸载"
 }
 
 menu() {
   while true; do
     cat <<'EOF'
 ==============================
- Chat VPS 一键部署脚本
+ Chat 一键脚本（仅启动面板）
 ==============================
-1) 安装并配置 HTTPS
-2) 卸载
-3) 重启服务
-4) 查看状态
+1) 一键安装并启动部署面板
+2) 启动面板
+3) 停止面板
+4) 查看面板状态
+5) 卸载面板
 0) 退出
 EOF
-    read -r -p "请选择 [0-4]: " ch
+    read -r -p "请选择 [0-5]: " ch
     case "$ch" in
-      1) DOMAIN=""; EMAIL=""; prompt_missing; install_all ;;
-      2) uninstall_all ;;
-      3) restart_service ;;
-      4) show_status ;;
+      1) setup_panel ;;
+      2) start_panel ;;
+      3) stop_panel ;;
+      4) status_panel ;;
+      5) uninstall_panel ;;
       0) exit 0 ;;
       *) warn "无效选项" ;;
     esac
@@ -151,32 +109,23 @@ EOF
 }
 
 cmd="${1:-menu}"
-if [[ "$cmd" == "install" ]]; then
-  shift || true
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -d|--domain) DOMAIN="$2"; shift 2 ;;
-      -e|--email) EMAIL="$2"; shift 2 ;;
-      *) err "未知参数: $1"; exit 1 ;;
-    esac
-  done
-  install_all
-elif [[ "$cmd" == "uninstall" ]]; then
-  uninstall_all
-elif [[ "$cmd" == "restart" ]]; then
-  restart_service
-elif [[ "$cmd" == "status" ]]; then
-  show_status
-elif [[ "$cmd" == "menu" ]]; then
-  menu
-else
-  cat <<EOF
+case "$cmd" in
+  setup) setup_panel ;;
+  start) start_panel ;;
+  stop) stop_panel ;;
+  status) status_panel ;;
+  uninstall-panel) uninstall_panel ;;
+  menu) menu ;;
+  *)
+    cat <<EOF
 用法:
   bash deploy/quick_deploy.sh menu
-  bash deploy/quick_deploy.sh install -d 域名 -e 邮箱
-  bash deploy/quick_deploy.sh uninstall
-  bash deploy/quick_deploy.sh restart
+  bash deploy/quick_deploy.sh setup
+  bash deploy/quick_deploy.sh start
+  bash deploy/quick_deploy.sh stop
   bash deploy/quick_deploy.sh status
+  bash deploy/quick_deploy.sh uninstall-panel
 EOF
-  exit 1
-fi
+    exit 1
+    ;;
+esac
