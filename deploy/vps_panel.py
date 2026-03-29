@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -36,7 +35,6 @@ HTML = """
       <legend>安装参数</legend>
       <div>域名（已解析到本机）: <input name="domain" placeholder="chat.example.com" required /></div>
       <div>邮箱（用于证书）: <input name="email" placeholder="ops@example.com" required /></div>
-      <div>API Key: <input name="api_key" placeholder="请填写强随机密钥" required /></div>
     </fieldset>
     <button type="submit">安装并配置 HTTPS</button>
   </form>
@@ -65,9 +63,8 @@ def render(output: str = ""):
     return render_template_string(HTML, status=status(), output=output)
 
 
-def install_service(domain: str, email: str, api_key: str) -> str:
+def install_service(domain: str, email: str) -> str:
     logs: list[str] = []
-
     setup_cmds = [
         "apt-get update",
         "apt-get install -y python3-venv python3-pip nginx certbot python3-certbot-nginx",
@@ -90,7 +87,6 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory={APP_DIR}
-Environment=CHAT_API_KEY={api_key}
 ExecStart={VENV_DIR}/bin/gunicorn -w 2 -b 127.0.0.1:5000 server.app:app
 Restart=always
 User=root
@@ -163,10 +159,9 @@ def index():
 def install():
     domain = request.form.get("domain", "").strip()
     email = request.form.get("email", "").strip()
-    api_key = request.form.get("api_key", "").strip()
-    if not domain or not email or not api_key:
+    if not domain or not email:
         return render("参数不完整")
-    return render(install_service(domain, email, api_key))
+    return render(install_service(domain, email))
 
 
 @app.post("/restart")

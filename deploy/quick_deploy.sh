@@ -4,12 +4,10 @@ set -euo pipefail
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE_NAME="chat-server"
 VENV_DIR="$APP_DIR/.venv"
-ENV_FILE="/etc/chat-server.env"
 NGINX_SITE="/etc/nginx/sites-available/chat-server"
 
 DOMAIN=""
 EMAIL=""
-API_KEY=""
 
 log() { echo -e "[+] $*"; }
 warn() { echo -e "[!] $*"; }
@@ -22,24 +20,12 @@ need_root() {
   fi
 }
 
-parse_install_args() {
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -d|--domain) DOMAIN="$2"; shift 2 ;;
-      -e|--email) EMAIL="$2"; shift 2 ;;
-      -k|--api-key) API_KEY="$2"; shift 2 ;;
-      *) err "未知参数: $1"; exit 1 ;;
-    esac
-  done
-}
-
 prompt_missing() {
   [[ -n "$DOMAIN" ]] || read -r -p "请输入域名(已解析到VPS): " DOMAIN
   [[ -n "$EMAIL" ]] || read -r -p "请输入邮箱(用于证书): " EMAIL
-  [[ -n "$API_KEY" ]] || read -r -p "请输入 API Key: " API_KEY
 
-  if [[ -z "$DOMAIN" || -z "$EMAIL" || -z "$API_KEY" ]]; then
-    err "域名/邮箱/API Key 都不能为空"
+  if [[ -z "$DOMAIN" || -z "$EMAIL" ]]; then
+    err "域名/邮箱都不能为空"
     exit 1
   fi
 }
@@ -53,7 +39,6 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=${APP_DIR}
-EnvironmentFile=${ENV_FILE}
 ExecStart=${VENV_DIR}/bin/gunicorn -w 2 -b 127.0.0.1:5000 server.app:app
 Restart=always
 User=root
@@ -61,13 +46,6 @@ User=root
 [Install]
 WantedBy=multi-user.target
 EOF
-}
-
-write_env() {
-  cat > "$ENV_FILE" <<EOF
-CHAT_API_KEY=${API_KEY}
-EOF
-  chmod 600 "$ENV_FILE"
 }
 
 write_nginx() {
@@ -101,7 +79,6 @@ install_all() {
   "$VENV_DIR/bin/pip" install -r "$APP_DIR/requirements.txt"
 
   mkdir -p "$APP_DIR/server/data/uploads"
-  write_env
   write_service
   write_nginx
 
@@ -127,7 +104,6 @@ uninstall_all() {
   systemctl stop "$SERVICE_NAME" || true
   systemctl disable "$SERVICE_NAME" || true
   rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
-  rm -f "$ENV_FILE"
 
   rm -f "$NGINX_SITE"
   rm -f /etc/nginx/sites-enabled/chat-server
@@ -164,7 +140,7 @@ menu() {
 EOF
     read -r -p "请选择 [0-4]: " ch
     case "$ch" in
-      1) DOMAIN=""; EMAIL=""; API_KEY=""; prompt_missing; install_all ;;
+      1) DOMAIN=""; EMAIL=""; prompt_missing; install_all ;;
       2) uninstall_all ;;
       3) restart_service ;;
       4) show_status ;;
@@ -177,7 +153,13 @@ EOF
 cmd="${1:-menu}"
 if [[ "$cmd" == "install" ]]; then
   shift || true
-  parse_install_args "$@"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -d|--domain) DOMAIN="$2"; shift 2 ;;
+      -e|--email) EMAIL="$2"; shift 2 ;;
+      *) err "未知参数: $1"; exit 1 ;;
+    esac
+  done
   install_all
 elif [[ "$cmd" == "uninstall" ]]; then
   uninstall_all
@@ -191,7 +173,7 @@ else
   cat <<EOF
 用法:
   bash deploy/quick_deploy.sh menu
-  bash deploy/quick_deploy.sh install -d 域名 -e 邮箱 -k API_KEY
+  bash deploy/quick_deploy.sh install -d 域名 -e 邮箱
   bash deploy/quick_deploy.sh uninstall
   bash deploy/quick_deploy.sh restart
   bash deploy/quick_deploy.sh status
