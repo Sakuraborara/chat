@@ -225,14 +225,6 @@ def poll_messages():
             """,
             (request.user["id"],),
         ).fetchall()
-
-        ids = [r["id"] for r in rows]
-        if ids:
-            conn.execute(
-                f"UPDATE messages SET delivered = 1 WHERE id IN ({','.join('?' * len(ids))})",
-                ids,
-            )
-        conn.commit()
         conn.close()
 
     return jsonify(
@@ -252,6 +244,38 @@ def poll_messages():
             ]
         }
     )
+
+
+@app.post("/api/messages/ack")
+@auth_required
+def ack_messages():
+    payload = request.get_json(silent=True) or {}
+    message_ids = payload.get("message_ids")
+    if not isinstance(message_ids, list) or not message_ids:
+        return jsonify({"error": "message_ids must be a non-empty list"}), 400
+
+    try:
+        ids = [int(mid) for mid in message_ids]
+    except (TypeError, ValueError):
+        return jsonify({"error": "message_ids must contain integers"}), 400
+
+    with _db_lock:
+        conn = get_conn()
+        placeholders = ",".join("?" * len(ids))
+        params = [request.user["id"], *ids]
+        cur = conn.execute(
+            f"""
+            UPDATE messages
+            SET delivered = 1
+            WHERE recipient_id = ? AND delivered = 0 AND id IN ({placeholders})
+            """,
+            params,
+        )
+        conn.commit()
+        updated = cur.rowcount
+        conn.close()
+
+    return jsonify({"ok": True, "acknowledged": updated})
 
 
 @app.get("/api/messages/list")

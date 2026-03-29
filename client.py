@@ -57,6 +57,8 @@ class ChatClientGUI:
         self.token = None
         self.running = False
         self.msg_queue = queue.Queue()
+        self.insecure_skip_verify_var = tk.BooleanVar(value=False)
+        self.ca_cert_path_var = tk.StringVar()
 
         self._build_ui()
         self._load_config()
@@ -69,6 +71,15 @@ class ChatClientGUI:
         tk.Label(top, text="服务器地址(HTTPS):").grid(row=0, column=0, sticky="w", padx=5, pady=4)
         tk.Entry(top, width=45, textvariable=self.server_var).grid(row=0, column=1, sticky="w", padx=5, pady=4)
         tk.Button(top, text="保存地址", command=self.save_config).grid(row=0, column=2, padx=5, pady=4)
+        tk.Checkbutton(
+            top,
+            text="跳过证书校验(不安全，仅测试)",
+            variable=self.insecure_skip_verify_var,
+        ).grid(row=0, column=3, columnspan=2, sticky="w", padx=5, pady=4)
+
+        tk.Label(top, text="自定义CA证书(可选):").grid(row=0, column=5, sticky="w", padx=5, pady=4)
+        tk.Entry(top, width=26, textvariable=self.ca_cert_path_var).grid(row=0, column=6, sticky="w", padx=5, pady=4)
+        tk.Button(top, text="选择证书", command=self.pick_ca_cert).grid(row=0, column=7, padx=5, pady=4)
 
         tk.Label(top, text="用户名:").grid(row=1, column=0, sticky="w", padx=5, pady=4)
         tk.Entry(top, width=20, textvariable=self.username_var).grid(row=1, column=1, sticky="w", padx=5, pady=4)
@@ -111,19 +122,46 @@ class ChatClientGUI:
         headers = kwargs.pop("headers", {})
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
-        return requests.request(method, url, headers=headers, timeout=10, verify=False, **kwargs)
+        verify = self._tls_verify_value()
+        return requests.request(method, url, headers=headers, timeout=10, verify=verify, **kwargs)
+
+    def _tls_verify_value(self):
+        if self.insecure_skip_verify_var.get():
+            return False
+        cert_path = self.ca_cert_path_var.get().strip()
+        if cert_path:
+            return cert_path
+        return True
 
     def _load_config(self):
         if CONFIG_PATH.exists():
             try:
                 obj = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
                 self.server_var.set(obj.get("server", self.server_var.get()))
+                self.insecure_skip_verify_var.set(bool(obj.get("insecure_skip_verify", False)))
+                self.ca_cert_path_var.set(obj.get("ca_cert_path", ""))
             except Exception:
                 pass
 
     def save_config(self):
-        CONFIG_PATH.write_text(json.dumps({"server": self.server_var.get()}, ensure_ascii=False, indent=2), encoding="utf-8")
+        CONFIG_PATH.write_text(
+            json.dumps(
+                {
+                    "server": self.server_var.get(),
+                    "insecure_skip_verify": self.insecure_skip_verify_var.get(),
+                    "ca_cert_path": self.ca_cert_path_var.get().strip(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         self._log("已保存服务器地址。")
+
+    def pick_ca_cert(self):
+        path = filedialog.askopenfilename(title="选择CA证书", filetypes=[("PEM/CRT", "*.pem *.crt"), ("All", "*.*")])
+        if path:
+            self.ca_cert_path_var.set(path)
 
     def register(self):
         try:
@@ -188,7 +226,16 @@ class ChatClientGUI:
             self.received_list.insert(tk.END, label)
             self.received_list.itemconfig(tk.END, {'fg': 'blue'})
             self.received_list.insert(tk.END, json.dumps(msg, ensure_ascii=False))
+            self._ack_messages([msg["id"]])
         self.root.after(1000, self._schedule_queue_pump)
+
+    def _ack_messages(self, ids):
+        try:
+            resp = self._request("POST", "/api/messages/ack", json={"message_ids": ids})
+            if not resp.ok:
+                self._log(f"回执失败: {resp.text}")
+        except Exception as e:
+            self._log(f"回执异常: {e}")
 
     def _get_message_password(self):
         pwd = simpledialog.askstring("本次消息密码", "请输入本次消息加密密码(>=8位):", show="*")
@@ -298,7 +345,8 @@ class ChatClientGUI:
 
 
 def main():
-    requests.packages.urllib3.disable_warnings()  # noqa
+    if os.environ.get("CHAT_CLIENT_ALLOW_INSECURE_TLS") == "1":
+        requests.packages.urllib3.disable_warnings()  # noqa
     root = tk.Tk()
     app = ChatClientGUI(root)
     root.protocol("WM_DELETE_WINDOW", lambda: (setattr(app, "running", False), root.destroy()))
