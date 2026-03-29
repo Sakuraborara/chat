@@ -5,7 +5,7 @@
 
 ## 整体流程
 
-1. 在 VPS 上运行一键脚本：`deploy/quick_deploy.sh`。
+1. 在 VPS 项目根目录运行一键脚本：`quick_deploy.sh`（或 `deploy/quick_deploy.sh`）。
 2. 脚本启动部署面板服务（`chat-deploy-panel`）。
 3. 打开面板 `http://<VPS_IP>:8088`。
 4. 在面板点击安装/卸载程序（`chat-server`）。
@@ -14,8 +14,10 @@
 
 ## 1) VPS 一键脚本（仅启动/管理面板）
 
+> 注意：请先 `cd` 到项目根目录再执行脚本，否则会出现 `No such file or directory`。
+
 ```bash
-sudo bash deploy/quick_deploy.sh setup
+sudo bash quick_deploy.sh setup
 ```
 
 会自动：
@@ -26,16 +28,16 @@ sudo bash deploy/quick_deploy.sh setup
 ### 其他命令
 
 ```bash
-sudo bash deploy/quick_deploy.sh start
-sudo bash deploy/quick_deploy.sh stop
-sudo bash deploy/quick_deploy.sh status
-sudo bash deploy/quick_deploy.sh uninstall-panel
+sudo bash quick_deploy.sh start
+sudo bash quick_deploy.sh stop
+sudo bash quick_deploy.sh status
+sudo bash quick_deploy.sh uninstall-panel
 ```
 
 也可以直接进菜单：
 
 ```bash
-sudo bash deploy/quick_deploy.sh
+sudo bash quick_deploy.sh
 ```
 
 ## 2) 面板部署（真正的程序安装/卸载入口）
